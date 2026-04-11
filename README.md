@@ -9,6 +9,10 @@
 
 如果没有你需要的版本，你可以查看[如何查找偏移](./find_offset.md)来自己更新偏移，全程用时应该不会超过五分钟
 
+更详细的文章介绍：[支持多账号自动登录的微信多开软件](https://mp.weixin.qq.com/s/Uv84LKkI8qICTCiUOXFc0Q)
+
+网盘下载地址: `https://wwbmk.lanzoue.com/b00yb1ht1a  密码: hagx`
+
 ![](./images//1.png)
 
 #### 使用方法
