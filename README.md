@@ -9,6 +9,45 @@
 
 如果没有你需要的版本，你可以查看[如何查找偏移](./find_offset.md)来自己更新偏移，全程用时应该不会超过五分钟
 
+#### 自动查找偏移
+
+也可以使用 `find_offset.py` 自动扫描本地 `Weixin.dll`，查找当前版本需要的偏移并写入 `config.ini`，不需要启动 x64dbg。
+
+先安装依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+如果已经知道 `Weixin.dll` 路径，直接指定 DLL：
+
+```powershell
+python .\find_offset.py --dll "D:\path\to\Weixin.dll"
+```
+
+如果只知道微信主程序路径，也可以指定 `Weixin.exe`，脚本会自动在同目录或版本子目录中寻找 `Weixin.dll`：
+
+```powershell
+python .\find_offset.py --wechat-exe "D:\path\to\Weixin.exe"
+```
+
+也可以在 `config.ini` 的 `[weixin]` 中填写 `path`，之后直接运行：
+
+```ini
+[weixin]
+path = D:\path\to\Weixin.exe
+```
+
+```powershell
+python .\find_offset.py
+```
+
+如果只想预览查找结果、不修改 `config.ini`，加上 `--dry-run`：
+
+```powershell
+python .\find_offset.py --dll "D:\path\to\Weixin.dll" --dry-run
+```
+
 更详细的文章介绍：[支持多账号自动登录的微信多开软件](https://mp.weixin.qq.com/s/Uv84LKkI8qICTCiUOXFc0Q)
 
 网盘下载地址: `https://wwbmk.lanzoue.com/b00yb1ht1a  密码: hagx`

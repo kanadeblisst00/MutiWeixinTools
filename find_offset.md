@@ -20,7 +20,7 @@
 
 ![alt text](./images/4.png)
 
-先搜索`XWeChat_App_Instance_Identity_Mutex_Name`,这个`7FF96CFE0DBE`就是这个字符串的地址，你可以双击跳转过去按空格就能复制出来。
+先搜索L`XWeChat_App_Instance_Identity_Mutex_Name`(宽字符串)，这个`7FF96CFE0DBE`就是这个字符串的地址，你可以双击跳转过去按空格就能复制出来。
 
 ![alt text](./images/5.png)
 
@@ -28,7 +28,7 @@
 
 ![alt text](./images/6.png)
 
-还是这个字符串的位置一直划到下面第一个ret指令的地方，选择ret前面的第一个call所在的地址：00007FF966317836，偏移同样减去weixin.dll的基址(hook_offset)
+找到`XWeChat_App_Instance_Identity_Mutex_Name`这个字符串地址被引用的位置，然后从被引用的地址开始一直向下滑，直到看到第一个ret指令的地方，选择ret前面的第一个call所在的地址：00007FF966317836，将这个地址同样减去weixin.dll的就是hook_offset的偏移
 
 ![alt text](./images/7.png)
 
