@@ -13,14 +13,19 @@ from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 MODULE_NAME = "weixin.dll"
 MUTEX_NAME = "XWeChat_App_Instance_Identity_Mutex_Name"
 
-HOOK_PATTERN = (
-    "0F 10 05 ?? ?? ?? ?? 0F 11 00 "
-    "0F 10 05 ?? ?? ?? ?? 0F 11 40 10 "
-    "0F 10 05 ?? ?? ?? ?? 0F 11 40 20 "
-    "0F 10 05 ?? ?? ?? ?? 0F 11 40 30 "
-    "0F 10 05 ?? ?? ?? ?? 0F 11 40 40 "
+# Older builds use movups (0F 10); 4.1.12.x+ may use movaps (0F 28) for the loads.
+_HOOK_PATTERN_TEMPLATE = (
+    "{load} ?? ?? ?? ?? 0F 11 00 "
+    "{load} ?? ?? ?? ?? 0F 11 40 10 "
+    "{load} ?? ?? ?? ?? 0F 11 40 20 "
+    "{load} ?? ?? ?? ?? 0F 11 40 30 "
+    "{load} ?? ?? ?? ?? 0F 11 40 40 "
     "66 C7 40 50 00 00 31 C9 31 D2 49 89 C0 "
     "FF 15 ?? ?? ?? ?? 48 85 C0"
+)
+HOOK_PATTERNS = (
+    _HOOK_PATTERN_TEMPLATE.format(load="0F 10 05"),  # movups xmm0, [rip+disp]
+    _HOOK_PATTERN_TEMPLATE.format(load="0F 28 05"),  # movaps xmm0, [rip+disp]
 )
 
 GLOBAL_CONFIG_PATTERN = (
@@ -240,7 +245,7 @@ def find_global_config_offset(data: bytes) -> int:
 
 
 def hook_pattern_references_mutex(data: bytes, image_base: int, hook_rva: int, mutex_rva: int) -> bool:
-    # First instruction is: 0F 10 05 <disp32> => movups xmm0, xmmword ptr [rip+disp32]
+    # First instruction is: 0F 10/28 05 <disp32> => movups/movaps xmm0, xmmword ptr [rip+disp32]
     if hook_rva + 7 > len(data):
         return False
     displacement = int.from_bytes(data[hook_rva + 3 : hook_rva + 7], "little", signed=True)
@@ -249,10 +254,11 @@ def hook_pattern_references_mutex(data: bytes, image_base: int, hook_rva: int, m
 
 
 def find_hook_offset(data: bytes, image_base: int, mutex_rva: int) -> int:
-    pattern = compile_hex_pattern(HOOK_PATTERN)
-    matches = list(pattern.finditer(data))
+    matches = []
+    for pattern_text in HOOK_PATTERNS:
+        matches.extend(compile_hex_pattern(pattern_text).finditer(data))
     if not matches:
-        raise RuntimeError("Could not find hook pattern.")
+        raise RuntimeError("Could not find hook pattern (tried movups and movaps variants).")
 
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     md.detail = False
