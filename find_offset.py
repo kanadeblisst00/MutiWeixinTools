@@ -40,6 +40,12 @@ GLOBAL_CONFIG_PATTERN = (
 L_CONFIG_MOV = bytes.fromhex("48 B8 6C 5F 63 6F 6E 66 69 67")
 HOST_REDIRECT = b"/host-redirect.xml"
 HOST_REDIRECT_NO_SLASH = b"host-redirect.xml"
+OFFSET_KEYS = (
+    "mutex_name_offset",
+    "global_config_offset",
+    "host_redirect_xml_offset",
+    "hook_offset",
+)
 
 
 @dataclass
@@ -79,6 +85,11 @@ def parse_args():
         "--dry-run",
         action="store_true",
         help="Print detected offsets without writing config.ini.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rescan and overwrite even if this version already exists in config.ini.",
     )
     return parser.parse_args()
 
@@ -121,6 +132,38 @@ def load_config_wechat_path(config_path: Path) -> str | None:
     config.read(config_path, encoding="utf-8")
     value = config.get("weixin", "path", fallback="").strip().strip('"')
     return value or None
+
+
+def parse_offset_value(raw: str) -> int | None:
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
+def load_existing_offsets(config_path: Path, version: str) -> Offsets | None:
+    """Return existing offsets for version when all required keys are present."""
+    if not config_path.exists() or not version or version == "unknown":
+        return None
+
+    config = configparser.ConfigParser()
+    config.read(config_path, encoding="utf-8")
+    if not config.has_section(version):
+        return None
+
+    values = {}
+    for key in OFFSET_KEYS:
+        if not config.has_option(version, key):
+            return None
+        parsed = parse_offset_value(config.get(version, key))
+        if parsed is None:
+            return None
+        values[key] = parsed
+
+    return Offsets(version=version, **values)
 
 
 def version_key(path: Path) -> tuple[int, ...]:
@@ -552,11 +595,23 @@ def main() -> int:
     args = parse_args()
     config_path = Path(args.config).resolve()
     dll_path = resolve_dll_path(args, config_path)
+    version = get_file_version(dll_path)
+
+    print(f"DLL: {dll_path}")
+    print(f"Version: {version}")
+
+    if not args.force:
+        existing = load_existing_offsets(config_path, version)
+        if existing is not None:
+            print(f"Offsets for [{version}] already exist in {config_path}, skip scanning.")
+            print(format_offsets(existing), end="")
+            if args.dry_run:
+                print("Dry run: config.ini was not changed.")
+            print("Use --force to rescan and overwrite.")
+            return 0
 
     print(f"Scanning file: {dll_path}")
     image = load_pe_image(dll_path)
-
-    print(f"Version: {get_file_version(image.path)}")
     print(f"ImageBase: 0x{image.image_base:X}")
 
     offsets = find_offsets(image)
