@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pefile
-from capstone import CS_ARCH_X86, CS_MODE_64, Cs
-
 
 
 MODULE_NAME = "weixin.dll"
@@ -253,15 +251,236 @@ def hook_pattern_references_mutex(data: bytes, image_base: int, hook_rva: int, m
     return target - image_base == mutex_rva
 
 
+# Pure-Python x64 length decoder (avoids Capstone's native DLL, which Nuitka/Pygrower often omit).
+_OP_NONE = 0x00
+_OP_IMM8 = 0x01
+_OP_IMM16 = 0x02
+_OP_IMM1632 = 0x04
+_OP_IMM163264 = 0x08
+_OP_EXTENDED = 0x10
+_OP_RELATIVE = 0x20
+_OP_MODRM = 0x40
+_OP_PREFIX = 0x80
+
+_FLAGS_TABLE = [
+    # 00-0F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_NONE, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_NONE, _OP_NONE,
+    # 10-1F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_NONE, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_NONE, _OP_NONE,
+    # 20-2F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_PREFIX, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_PREFIX, _OP_NONE,
+    # 30-3F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_PREFIX, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM1632, _OP_PREFIX, _OP_NONE,
+    # 40-4F (REX handled separately in 64-bit)
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # 50-5F
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # 60-6F
+    _OP_NONE, _OP_NONE, _OP_MODRM, _OP_MODRM, _OP_PREFIX, _OP_PREFIX, _OP_PREFIX, _OP_PREFIX,
+    _OP_IMM1632, _OP_MODRM | _OP_IMM1632, _OP_IMM8, _OP_MODRM | _OP_IMM8, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # 70-7F
+    _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8,
+    _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8,
+    _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8,
+    _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8,
+    # 80-8F
+    _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM1632, _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 90-9F
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_NONE, _OP_NONE, _OP_IMM16 | _OP_IMM1632, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # A0-AF
+    _OP_IMM163264, _OP_IMM163264, _OP_IMM163264, _OP_IMM163264, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_IMM8, _OP_IMM1632, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # B0-BF
+    _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8,
+    _OP_IMM163264, _OP_IMM163264, _OP_IMM163264, _OP_IMM163264,
+    _OP_IMM163264, _OP_IMM163264, _OP_IMM163264, _OP_IMM163264,
+    # C0-CF
+    _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8, _OP_IMM16, _OP_NONE, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM1632, _OP_IMM8 | _OP_IMM16, _OP_NONE, _OP_IMM16, _OP_NONE,
+    _OP_NONE, _OP_IMM8, _OP_NONE, _OP_NONE,
+    # D0-DF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_IMM8, _OP_IMM8, _OP_NONE, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # E0-EF
+    _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8, _OP_RELATIVE | _OP_IMM8,
+    _OP_IMM8, _OP_IMM8, _OP_IMM8, _OP_IMM8,
+    _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_IMM16 | _OP_IMM1632, _OP_RELATIVE | _OP_IMM8,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # F0-FF
+    _OP_PREFIX, _OP_NONE, _OP_PREFIX, _OP_PREFIX, _OP_NONE, _OP_NONE, _OP_MODRM, _OP_MODRM,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_MODRM, _OP_MODRM,
+]
+
+_FLAGS_TABLE_0F = [
+    # 00-0F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_MODRM, _OP_NONE, _OP_MODRM | _OP_IMM8,
+    # 10-1F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 20-2F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM | _OP_EXTENDED, _OP_NONE, _OP_MODRM, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 30-3F
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    _OP_MODRM | _OP_EXTENDED, _OP_NONE, _OP_MODRM | _OP_EXTENDED | _OP_IMM8, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # 40-4F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 50-5F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 60-6F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 70-7F
+    _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_NONE, _OP_MODRM, _OP_MODRM, _OP_NONE, _OP_NONE,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # 80-8F
+    _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632,
+    _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632,
+    _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632,
+    _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632, _OP_RELATIVE | _OP_IMM1632,
+    # 90-9F
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # A0-AF
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_MODRM, _OP_MODRM | _OP_IMM8, _OP_MODRM, _OP_NONE, _OP_NONE,
+    _OP_NONE, _OP_NONE, _OP_NONE, _OP_MODRM, _OP_MODRM | _OP_IMM8, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # B0-BF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM | _OP_IMM8, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # C0-CF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM | _OP_IMM8, _OP_MODRM, _OP_MODRM | _OP_IMM8, _OP_MODRM | _OP_IMM8,
+    _OP_MODRM | _OP_IMM8, _OP_MODRM, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE, _OP_NONE,
+    # D0-DF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # E0-EF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    # F0-FF
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM,
+    _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_MODRM, _OP_NONE,
+]
+
+
+def decode_x64_insn(code: bytes, offset: int = 0) -> tuple[int, str | None]:
+    """Return (length, kind) where kind is 'call', 'ret', or None."""
+    length = len(code)
+    if offset >= length:
+        raise ValueError("offset out of range")
+
+    i = offset
+    pr_66 = False
+    pr_67 = False
+    rexw = False
+
+    while i < length and (_FLAGS_TABLE[code[i]] & _OP_PREFIX):
+        if code[i] == 0x66:
+            pr_66 = True
+        elif code[i] == 0x67:
+            pr_67 = True
+        i += 1
+        if i - offset >= 15:
+            return i - offset, None
+
+    if i < length and 0x40 <= code[i] <= 0x4F:
+        rexw = bool(code[i] & 0x08)
+        i += 1
+
+    if i >= length:
+        raise ValueError("truncated instruction")
+
+    opcode_index = i
+    op = code[i]
+    i += 1
+    flags = _FLAGS_TABLE[op]
+    secondary = False
+
+    if op == 0x0F:
+        if i >= length:
+            raise ValueError("truncated 0F opcode")
+        op = code[i]
+        i += 1
+        flags = _FLAGS_TABLE_0F[op]
+        secondary = True
+        if flags & _OP_EXTENDED:
+            if i >= length:
+                raise ValueError("truncated 3-byte opcode")
+            i += 1
+
+    kind = None
+    if not secondary and op == 0xE8:
+        kind = "call"
+    elif not secondary and op in (0xC3, 0xC2, 0xCA, 0xCB):
+        kind = "ret"
+
+    modrm = None
+    if flags & _OP_MODRM:
+        if i >= length:
+            raise ValueError("truncated ModRM")
+        modrm = code[i]
+        i += 1
+        mod = modrm >> 6
+        reg = (modrm >> 3) & 7
+        rm = modrm & 7
+
+        if secondary is False and op == 0xFF and reg in (2, 3):
+            kind = "call"
+        if secondary is False and op == 0xF6 and reg in (0, 1):
+            flags |= _OP_IMM8
+        if secondary is False and op == 0xF7 and reg in (0, 1):
+            flags |= _OP_IMM163264
+
+        if mod != 3 and rm == 4 and not pr_67:
+            if i >= length:
+                raise ValueError("truncated SIB")
+            sib = code[i]
+            i += 1
+            if mod == 0 and (sib & 7) == 5:
+                i += 4
+
+        disp = 0
+        if mod == 0:
+            if rm == 5:
+                disp = 4
+        elif mod == 1:
+            disp = 1
+        elif mod == 2:
+            disp = 4
+        i += disp
+
+    imm = 0
+    if rexw and (flags & _OP_IMM163264):
+        imm = 8
+    elif flags & (_OP_IMM1632 | _OP_IMM163264):
+        imm = 2 if pr_66 else 4
+    imm += flags & 0x03  # IMM8 | IMM16 bits
+    i += imm
+
+    size = i - offset
+    if size <= 0 or size > 15:
+        raise ValueError(f"invalid instruction length: {size}")
+    return size, kind
+
+
 def find_hook_offset(data: bytes, image_base: int, mutex_rva: int) -> int:
     matches = []
     for pattern_text in HOOK_PATTERNS:
         matches.extend(compile_hex_pattern(pattern_text).finditer(data))
     if not matches:
         raise RuntimeError("Could not find hook pattern (tried movups and movaps variants).")
-
-    md = Cs(CS_ARCH_X86, CS_MODE_64)
-    md.detail = False
 
     for match in matches:
         start = match.start()
@@ -270,13 +489,20 @@ def find_hook_offset(data: bytes, image_base: int, mutex_rva: int) -> int:
 
         last_call = None
         code = data[start : start + 0x3000]
-        for instruction in md.disasm(code, image_base + start):
-            if instruction.mnemonic == "call":
-                last_call = instruction.address
-            elif instruction.mnemonic == "ret":
+        offset = 0
+        while offset < len(code):
+            try:
+                size, kind = decode_x64_insn(code, offset)
+            except ValueError:
+                break
+            address = image_base + start + offset
+            if kind == "call":
+                last_call = address
+            elif kind == "ret":
                 if last_call is None:
                     break
                 return last_call - image_base
+            offset += size
 
     raise RuntimeError("Found hook pattern, but could not find the call before ret.")
 
