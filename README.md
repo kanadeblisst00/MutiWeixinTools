@@ -14,9 +14,7 @@
 
 ![](images/2.png)
 
-网盘下载地址: `https://wwbmk.lanzoue.com/b00yb1ht1a  密码: hagx`
-
-私有网盘地址：`http://r5.ikanade.cn:25244/@s/Qp9jxwPV`
+网盘下载地址: `https://wwbmk.lanzoue.com/b068vkaij密码:gxs4`
 
 #### 使用方法
 
